@@ -2,7 +2,9 @@
 
 **Live Polish → Spanish speech translation for your phone.** Point it at a priest, a tour guide or a shop assistant and read, in real time, what they say in Polish and its Spanish translation. In conversation mode it also turns what *you* say in Spanish into Polish text you can show the other person.
 
-App UI is in Spanish. It is a Progressive Web App: open it in Chrome on Android and install it to the home screen.
+App UI is in Spanish. It is a Progressive Web App: open **https://miguelhermar.github.io/entiendo/** in Chrome on Android and install it to the home screen.
+
+![Entiendo screens](docs/screens.png)
 
 ## Modes
 
