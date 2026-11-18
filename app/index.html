@@ -154,6 +154,7 @@
 
       <div id="setupKeyBox">
         <h3>Tu clave de Soniox</h3>
+        <p class="note">Solo se pide <b>una vez</b>: queda guardada en este teléfono y la app no vuelve a pedirla.</p>
         <ol class="steps">
           <li>Crea una cuenta en <a href="https://console.soniox.com/signup" target="_blank" rel="noopener">console.soniox.com</a>.</li>
           <li>Añade saldo en <b>Billing</b> (10 US$ dan para unas 40–80 horas).</li>
@@ -162,13 +163,15 @@
         </ol>
         <div class="key-row">
           <input id="setupKey" type="password" inputmode="text" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Pega tu clave de Soniox" aria-label="Clave de Soniox">
+          <button type="button" class="paste-btn" data-paste="setupKey">Pegar</button>
           <button type="button" class="icon-btn" data-reveal="setupKey" aria-label="Mostrar u ocultar la clave"><svg class="ic"><use href="#i-eye"/></svg></button>
         </div>
         <p class="msg" id="setupMsg"></p>
       </div>
 
       <button type="button" class="primary" id="setupGo">Empezar</button>
-      <p class="fine">La clave se guarda solo en este teléfono y únicamente se envía a Soniox. Puedes cambiar de motor cuando quieras en Ajustes.</p>
+      <button type="button" class="link wide" id="setupLater">¿No tienes la clave a mano? Empieza gratis ahora y añádela luego</button>
+      <p class="fine">La clave se guarda solo en este teléfono (no hace falta volver a pegarla) y únicamente se envía a Soniox. Puedes cambiar de motor cuando quieras en Ajustes.</p>
     </div>
   </div>
 
@@ -192,6 +195,7 @@
         <h3>Clave de Soniox</h3>
         <div class="key-row">
           <input id="setKey" type="password" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="Pega tu clave de Soniox" aria-label="Clave de Soniox">
+          <button type="button" class="paste-btn" data-paste="setKey">Pegar</button>
           <button type="button" class="icon-btn" data-reveal="setKey" aria-label="Mostrar u ocultar la clave"><svg class="ic"><use href="#i-eye"/></svg></button>
         </div>
         <div class="row-btns">

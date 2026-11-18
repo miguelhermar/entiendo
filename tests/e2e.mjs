@@ -117,6 +117,15 @@ await step('valid key passes the check and closes the setup', async () => {
   await shot(page, '02-empty-misa');
 });
 
+await step('the key is asked only once: reopening the app skips the setup', async () => {
+  await page.reload();
+  await page.waitForSelector('#btnMic');
+  await sleep(300);
+  assert(await page.isHidden('#sheetSetup'), 'setup must not come back');
+  const s = await page.evaluate(() => JSON.parse(localStorage.getItem('entiendo:settings')));
+  assert(s.apiKey === 'test-key', 'key still saved');
+});
+
 await step('Misa: live Polish text with Spanish translation', async () => {
   await control('reset');
   assert((await page.getAttribute('[data-mode="misa"]', 'aria-selected')) === 'true', 'misa selected by default');
@@ -396,6 +405,34 @@ await step('free engine conversation: PL / ES buttons', async () => {
   assert(errs2.length === 0, errs2.join('\n'));
 });
 await ctx2.close();
+
+// ---------------------------------------------------------------- first run without a key
+console.log('E2E: first run without a key at hand');
+const ctx4 = await newContext();
+const p4 = await ctx4.newPage();
+await step('Pegar fills the key from the clipboard', async () => {
+  await p4.goto(appUrl());
+  await p4.waitForSelector('#sheetSetup:not([hidden])');
+  await p4.evaluate(() => navigator.clipboard.writeText('  clip-key-123  '));
+  await p4.click('[data-paste="setupKey"]');
+  await p4.waitForFunction(() => document.getElementById('setupKey').value !== '', null, { timeout: 3000 });
+  assert((await p4.inputValue('#setupKey')) === 'clip-key-123', 'pasted and trimmed');
+  await shot(p4, '15-setup-paste');
+});
+await step('"start free now" skips the key and lands on the main screen', async () => {
+  await p4.fill('#setupKey', '');
+  assert(await p4.isVisible('#setupLater'), 'skip button visible with Soniox selected');
+  await p4.click('#setupLater');
+  await p4.waitForSelector('#sheetSetup', { state: 'hidden', timeout: 3000 });
+  const s = await p4.evaluate(() => JSON.parse(localStorage.getItem('entiendo:settings')));
+  assert(s.engine === 'free' && s.onboarded === true && !s.apiKey, 'free engine, onboarded: ' + JSON.stringify(s));
+  assert((await p4.textContent('#engineLabel')).includes('Gratis'), 'free label');
+  await p4.reload();
+  await p4.waitForSelector('#btnMic');
+  await sleep(300);
+  assert(await p4.isHidden('#sheetSetup'), 'no setup after reload');
+});
+await ctx4.close();
 
 // ---------------------------------------------------------------- PWA / offline
 console.log('E2E: installability + offline');

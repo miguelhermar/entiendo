@@ -215,7 +215,7 @@ function renderEmpty() {
     tip = 'Toca una de tus frases para mostrarla en grande.';
   }
   if (settings.engine === 'soniox' && !settings.apiKey) {
-    tip = 'Primero añade tu clave de Soniox en Ajustes (o elige el motor gratuito).';
+    tip = 'Falta tu clave de Soniox: pégala una sola vez (pulsa el micrófono) o cambia al motor gratuito en Ajustes.';
   }
   $('emptyHint').textContent = hint;
   $('emptyTip').textContent = tip;
@@ -866,6 +866,19 @@ function renderSetup() {
 function updateSetupKeyBox() {
   const v = document.querySelector('input[name="setupEngine"]:checked').value;
   $('setupKeyBox').hidden = v !== 'soniox';
+  $('setupLater').hidden = v !== 'soniox' || !freeEngineSupported();
+}
+
+// No key at hand: start with the free engine now, add the key later.
+function onSetupLater() {
+  settings.engine = 'free';
+  settings.onboarded = true;
+  saveSettings(settings);
+  closeSheet('sheetSetup');
+  renderModes();
+  renderEmpty();
+  updateDuo();
+  toast('Modo gratis activado. Cuando tengas la clave: Ajustes → Soniox.', 4000);
 }
 
 async function checkAndSaveKey(key, msgEl, button) {
@@ -1219,6 +1232,25 @@ function wire() {
   // setup
   for (const r of document.querySelectorAll('input[name="setupEngine"]')) r.addEventListener('change', updateSetupKeyBox);
   $('setupGo').addEventListener('click', onSetupGo);
+  $('setupLater').addEventListener('click', onSetupLater);
+  // One-tap paste of the key (falls back to the usual long-press paste).
+  for (const b of document.querySelectorAll('[data-paste]')) {
+    b.addEventListener('click', async () => {
+      const input = $(b.dataset.paste);
+      try {
+        const text = ((await navigator.clipboard.readText()) || '').trim();
+        if (text) {
+          input.value = text;
+          toast('Clave pegada');
+        } else {
+          toast('No hay nada copiado');
+        }
+      } catch {
+        input.focus();
+        toast('Mantén pulsado el campo y elige «Pegar»', 3000);
+      }
+    });
+  }
   $('setupKey').addEventListener('keydown', (e) => e.key === 'Enter' && onSetupGo());
 
   // settings
@@ -1350,6 +1382,14 @@ function init() {
   view.renderAll();
   updateContentState();
   wire();
+  // Ask Chrome to never evict this app's data (key, history). Installed apps
+  // are usually granted this automatically.
+  if (navigator.storage && navigator.storage.persist) {
+    navigator.storage
+      .persisted()
+      .then((p) => p || navigator.storage.persist())
+      .catch(() => {});
+  }
   if (!settings.onboarded) openSheet('sheetSetup');
   handleLaunchParams();
   registerServiceWorker();
