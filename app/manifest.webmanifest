@@ -1,0 +1,25 @@
+{
+  "id": "./",
+  "name": "Entiendo · Polaco → Español",
+  "short_name": "Entiendo",
+  "description": "Transcripción y traducción en tiempo real del polaco al español (y del español al polaco).",
+  "lang": "es",
+  "dir": "ltr",
+  "start_url": "./?source=pwa",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0b0d12",
+  "theme_color": "#0b0d12",
+  "categories": ["utilities", "productivity", "education"],
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Misa", "short_name": "Misa", "description": "Empezar a escuchar la Misa", "url": "./?mode=misa&start=1", "icons": [{ "src": "icons/shortcut-misa.png", "sizes": "96x96", "type": "image/png" }] },
+    { "name": "Conversar", "short_name": "Conversar", "description": "Conversación polaco ⇄ español", "url": "./?mode=conversar&start=1", "icons": [{ "src": "icons/shortcut-conversar.png", "sizes": "96x96", "type": "image/png" }] },
+    { "name": "Escuchar", "short_name": "Escuchar", "description": "Escuchar y traducir polaco", "url": "./?mode=escuchar&start=1", "icons": [{ "src": "icons/shortcut-escuchar.png", "sizes": "96x96", "type": "image/png" }] }
+  ]
+}
