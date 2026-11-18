@@ -102,7 +102,7 @@ export function saveSession(meta, blocks) {
     mode: meta.mode,
     engine: meta.engine,
     startedAt: meta.startedAt,
-    updatedAt: Date.now(),
+    updatedAt: meta.updatedAt || Date.now(),
     durationMs: meta.durationMs || 0,
     count: blocks.length,
     preview: previewOf(blocks),

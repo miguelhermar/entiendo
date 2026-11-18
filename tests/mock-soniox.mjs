@@ -72,6 +72,8 @@ export function startMock(port = 8787, { tickMs = 110 } = {}) {
   const stats = { connections: 0, configs: [], keys: [], streams: [], endFrames: 0, finishedSent: 0, errorsSent: 0 };
   const live = new Set();
   let nextError = null;
+  let hangHandshakes = 0; // simulate a stalled handshake on a weak network
+  const hungSockets = new Set();
 
   const http = createServer((req, res) => {
     const url = new URL(req.url, 'http://x');
@@ -83,6 +85,9 @@ export function startMock(port = 8787, { tickMs = 110 } = {}) {
       nextError = { error_code: Number(url.searchParams.get('code') || 503), error_type: url.searchParams.get('type') || 'service_unavailable' };
       for (const c of live) c.fail(nextError);
       nextError = null;
+      res.end('{"ok":true}');
+    } else if (url.pathname === '/control/hang') {
+      hangHandshakes = Number(url.searchParams.get('count') || 1);
       res.end('{"ok":true}');
     } else if (url.pathname === '/control/stats') {
       res.end(JSON.stringify({ ...stats, live: live.size }));
@@ -99,6 +104,15 @@ export function startMock(port = 8787, { tickMs = 110 } = {}) {
     server: http,
     path: '/transcribe-websocket',
     handleProtocols: (protocols) => (protocols.has('soniox-api-key') ? 'soniox-api-key' : false),
+    verifyClient: (info, cb) => {
+      if (hangHandshakes > 0) {
+        hangHandshakes -= 1;
+        stats.hung = (stats.hung || 0) + 1;
+        hungSockets.add(info.req.socket);
+        return; // never answer: the client must time out on its own
+      }
+      cb(true);
+    },
   });
 
   wss.on('connection', (ws, req) => {
@@ -183,7 +197,7 @@ export function startMock(port = 8787, { tickMs = 110 } = {}) {
     });
   });
 
-  return new Promise((ok) => http.listen(port, '127.0.0.1', () => ok({ http, wss, stats, close: () => new Promise((r) => { for (const c of live) c.ws.terminate(); wss.close(); http.close(r); }) })));
+  return new Promise((ok) => http.listen(port, '127.0.0.1', () => ok({ http, wss, stats, close: () => new Promise((r) => { for (const c of live) c.ws.terminate(); for (const sock of hungSockets) sock.destroy(); wss.close(); http.closeAllConnections(); http.close(r); }) })));
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

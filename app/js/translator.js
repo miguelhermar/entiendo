@@ -168,16 +168,18 @@ const myMemory = {
 const PROVIDERS = [chromeBuiltin, googleExtension, googleGtx, myMemory];
 
 // Translate text. Resolves to { text, provider } or rejects if every
-// provider failed. `from` may be 'auto'.
+// provider failed. `from` may be 'auto'. Providers that failed recently are
+// tried last rather than skipped, so a translation is always attempted.
 export async function translate(text, from, to, { signal } = {}) {
   const clean = (text || '').trim();
   if (!clean) return { text: '', provider: 'none' };
   const key = from + '|' + to + '|' + clean;
   if (cache.has(key)) return { text: cache.get(key), provider: 'cache' };
+  const usable = PROVIDERS.filter((p) => p.available());
+  const order = [...usable.filter((p) => !isDown(p.name)), ...usable.filter((p) => isDown(p.name) && p.name !== 'chrome')];
   let lastErr = null;
-  for (const p of PROVIDERS) {
+  for (const p of order) {
     if (signal && signal.aborted) throw new DOMException('Aborted', 'AbortError');
-    if (!p.available() || isDown(p.name)) continue;
     try {
       const out = await p.translate(clean, from, to, signal);
       if (typeof out === 'string' && out.trim()) {
@@ -193,6 +195,11 @@ export async function translate(text, from, to, { signal } = {}) {
     }
   }
   throw lastErr || new Error('no translation provider available');
+}
+
+// Connection is back: give every provider a fresh chance.
+export function resetTranslatorBackoff() {
+  breaker.clear();
 }
 
 export function _resetTranslatorForTests() {

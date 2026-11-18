@@ -146,7 +146,7 @@ export class SonioxEngine {
     const ws = sock.ws;
     ws.binaryType = 'arraybuffer';
     this.ws = ws;
-    this.conn = { legacy: sock.legacy, started: false, endSent: false, finished: false, error: null, openedAt: 0, lastMsgAt: Date.now() };
+    this.conn = { legacy: sock.legacy, started: false, endSent: false, finished: false, error: null, openedAt: 0, createdAt: Date.now(), lastMsgAt: Date.now() };
     const conn = this.conn;
 
     ws.onopen = () => {
@@ -164,8 +164,12 @@ export class SonioxEngine {
       for (const chunk of this.buffer) ws.send(chunk);
       this.buffer = [];
       this.bufferBytes = 0;
+      if (this.stopping) {
+        // Opened while the user was stopping: deliver what was recorded, end.
+        this._sendEnd();
+        return;
+      }
       this._setState('live', { reconnected: this.attempt > 0 });
-      if (this.stopping) this._sendEnd();
     };
 
     ws.onmessage = (ev) => {
@@ -181,7 +185,7 @@ export class SonioxEngine {
         conn.error = msg;
         return; // the server closes the socket right after an error
       }
-      if (Array.isArray(msg.tokens) && msg.tokens.length) this.onTokens(msg.tokens, msg);
+      if (Array.isArray(msg.tokens)) this.onTokens(msg.tokens, msg); // [] = provisional text gone
       if (msg.finished) {
         conn.finished = true;
         if (this.stopping) this._resolveStop();
@@ -218,14 +222,17 @@ export class SonioxEngine {
     // Unexpected: network drop, 408/413/429/5xx, watchdog...
     this._endConn(conn, { unexpected: true, error: conn.error, code: ev && ev.code });
     if (!this.wanted) return;
-    // Old-session audio is useless for a new session; the next chunk must
-    // carry a fresh container header.
-    this.buffer = [];
-    this.bufferBytes = 0;
-    try {
-      this.encoder.restart();
-    } catch {
-      /* ignore */
+    if (conn.started) {
+      // This stream consumed the container header: the next stream needs a
+      // fresh one. (If the socket never opened, the buffered audio — which
+      // starts with a header — is kept and sent on the next attempt.)
+      this.buffer = [];
+      this.bufferBytes = 0;
+      try {
+        this.encoder.restart();
+      } catch {
+        /* ignore */
+      }
     }
     this._scheduleRetry(conn.error);
   }
@@ -279,7 +286,12 @@ export class SonioxEngine {
     this.timers.watch = setInterval(() => {
       const ws = this.ws;
       const conn = this.conn;
-      if (!ws || !conn || !conn.started || conn.endSent) return;
+      if (!ws || !conn || conn.endSent) return;
+      if (!conn.started) {
+        // A weak signal can stall the TCP/TLS handshake for minutes.
+        if (Date.now() - conn.createdAt > 10000) this._recycle();
+        return;
+      }
       const quiet = Date.now() - conn.lastMsgAt;
       // Audio piling up unsent + server silent = dead connection.
       if ((quiet > 20000 && ws.bufferedAmount > 0) || quiet > 45000) this._recycle();
@@ -335,8 +347,16 @@ export class SonioxEngine {
 
   // Graceful stop: flush the last audio, end the stream, wait for the final
   // tokens (max ~5 s), then close.
-  async stop() {
-    if (!this.wanted && !this.stopping) return;
+  stop() {
+    if (this._stopPromise) return this._stopPromise;
+    if (!this.wanted && !this.stopping) return Promise.resolve();
+    this._stopPromise = this._stop().finally(() => {
+      this._stopPromise = null;
+    });
+    return this._stopPromise;
+  }
+
+  async _stop() {
     this.wanted = false;
     this.stopping = true;
     clearTimeout(this.timers.retry);

@@ -11,8 +11,8 @@ const { chromium } = require('playwright');
 const SHOTS = process.argv.includes('--shots');
 const shotDir = new URL('../shots/', import.meta.url).pathname;
 if (SHOTS) mkdirSync(shotDir, { recursive: true });
-const STATIC_PORT = 8080;
-const MOCK_PORT = 8787;
+const STATIC_PORT = Number(process.env.E2E_STATIC_PORT || 8080);
+const MOCK_PORT = Number(process.env.E2E_MOCK_PORT || 8787);
 const BASE = `http://localhost:${STATIC_PORT}/`;
 const WS = `ws://localhost:${MOCK_PORT}/transcribe-websocket`;
 const appUrl = (extra = '') => `${BASE}?ws=${encodeURIComponent(WS)}&nosw=1${extra}`;
@@ -155,6 +155,30 @@ await step('network drop: reconnects with a fresh audio header and keeps the tex
   assert(s2.bytes > 0, 'audio flows after reconnect');
   const after = await page.$$eval('#blocks .blk', (n) => n.length);
   assert(after >= before, 'transcript kept');
+});
+
+await step('autosave runs during continuous speech (not only on stop)', async () => {
+  const saved = await page.evaluate(() => {
+    const id = JSON.parse(localStorage.getItem('entiendo:current'));
+    const blocks = id && JSON.parse(localStorage.getItem('entiendo:session:' + id) || 'null');
+    return blocks ? blocks.length : 0;
+  });
+  assert(saved >= 1, 'session saved while listening: ' + saved);
+});
+
+await step('stalled handshake: times out, reconnects and keeps the recorded audio', async () => {
+  await control('hang?count=1');
+  const before = (await stats()).connections;
+  await control('drop');
+  await page.waitForFunction(() => /Reconectando|Conectando/.test(document.getElementById('stText').textContent), null, { timeout: 4000 });
+  await page.waitForFunction(() => document.getElementById('stText').textContent === 'En vivo', null, { timeout: 20000 });
+  await sleep(600);
+  const st = await stats();
+  assert(st.hung >= 1, 'a handshake hung');
+  assert(st.connections > before, 'reconnected after the hang');
+  const s2 = st.streams[st.streams.length - 1];
+  assert(s2.firstChunkHex === '1a45dfa3', 'fresh header after the hang: ' + s2.firstChunkHex);
+  assert(s2.bytes > 25000, 'audio recorded during the hang was delivered: ' + s2.bytes + ' bytes');
 });
 
 await step('server error 503: retries automatically', async () => {
@@ -399,6 +423,7 @@ await ctx3.close();
 
 await browser.close();
 await mock.close();
+staticServer.closeAllConnections();
 staticServer.close();
 console.log(`\n${passes} passed, ${failures} failed`);
 process.exit(failures ? 1 : 0);

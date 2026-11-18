@@ -24,7 +24,7 @@ import { Transcript } from './transcript.js';
 import { SonioxSegmenter } from './segmenter.js';
 import { SonioxEngine, testSonioxKey, describeSonioxError } from './soniox.js';
 import { FreeEngine, freeEngineSupported } from './free-engine.js';
-import { translate } from './translator.js';
+import { translate, resetTranslatorBackoff } from './translator.js';
 import { openMicrophone, stopStream, pickRecorderMime, OpusEncoder, PcmEncoder, LevelMeter } from './audio.js';
 import { TranscriptView } from './render.js';
 
@@ -52,6 +52,7 @@ const rt = {
   sessionMark: 0,
   freeLang: null,
   reloadWhenIdle: false,
+  startSeq: 0, // invalidates a microphone request that was cancelled
 };
 
 const view = new TranscriptView({
@@ -325,17 +326,19 @@ async function keepAwake(on) {
 let session = null;
 let saveTimer = null;
 
+// Content changed: remember when (drives the 2 h auto-split) and save at
+// most every 2 s — a throttle, so continuous speech still gets saved.
 function markSessionDirty() {
   if (!session) return;
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(saveCurrentSession, 2000);
+  session.updatedAt = Date.now();
+  if (!saveTimer) saveTimer = setTimeout(saveCurrentSession, 2000);
 }
 
 function saveCurrentSession() {
   clearTimeout(saveTimer);
+  saveTimer = null;
   if (!session || !transcript.hasContent()) return;
   accountDuration();
-  session.updatedAt = Date.now();
   if (!saveSession(session, transcript.toJSON())) {
     toast('No se pudo guardar el historial (almacenamiento lleno).', 3500);
   }
@@ -356,9 +359,13 @@ function ensureSession(mode) {
   }
 }
 
-function newSession() {
-  saveCurrentSession();
+// Drop the on-screen session without saving it (after "Nueva" saved it, or
+// after the user deleted it). Listening, if active, continues in a new one.
+function discardCurrentSession() {
+  clearTimeout(saveTimer);
+  saveTimer = null;
   if (rt.segmenter) rt.segmenter.resetForNewTranscript();
+  freeInterim = null;
   session = null;
   setCurrentSessionId(null);
   transcript.clear();
@@ -369,6 +376,11 @@ function newSession() {
     rt.sessionMark = Date.now();
   }
   scheduleRender();
+}
+
+function newSession() {
+  saveCurrentSession();
+  discardCurrentSession();
   toast('Nueva sesión');
 }
 
@@ -387,6 +399,9 @@ function restoreSession() {
 
 // ------------------------------------------------------------------ translations (fallback / free)
 
+const MAX_TR_TRIES = 5;
+let trRetryTimer = null;
+
 function translateBlock(b, from, to, { fallback = false } = {}) {
   if (b.trBusy) return;
   b.trBusy = true;
@@ -396,38 +411,66 @@ function translateBlock(b, from, to, { fallback = false } = {}) {
       b.tgtLang = to;
       b.tgtProvisional = false;
       b.err = false;
+      b.retr = false;
+      b.trFails = 0;
       if (fallback) b.fb = true;
+      markSessionDirty();
     })
     .catch(() => {
-      if (!b.tgt) b.err = true;
+      // Usually no connection right now: retry later with backoff, and only
+      // give up (showing "Sin traducción") after several attempts.
+      b.trFails = (b.trFails || 0) + 1;
+      b.trNextAt = Date.now() + Math.min(60000, 4000 * 2 ** (b.trFails - 1));
+      if (b.tgtProvisional) b.retr = true;
+      if (b.trFails >= MAX_TR_TRIES) {
+        if (!b.tgt) b.err = true;
+        b.retr = false;
+      }
+      scheduleTranslationRetry();
     })
     .finally(() => {
       b.trBusy = false;
-      b.retr = false;
       transcript.markDirty(b.id);
       scheduleRender();
-      markSessionDirty();
     });
+}
+
+function scheduleTranslationRetry() {
+  clearTimeout(trRetryTimer);
+  trRetryTimer = setTimeout(queueFallbackTranslations, 5000);
 }
 
 // Text Soniox left untranslated (another language, or a stream that ended
 // before its translation arrived) gets a free fallback translation; a
 // paragraph cut off by a dropped connection is re-translated in full.
+// Failed translations (e.g. offline) are retried here too.
 function queueFallbackTranslations() {
   const blocks = transcript.blocks;
-  for (let i = Math.max(0, blocks.length - 12); i < blocks.length; i++) {
+  const now = Date.now();
+  let waiting = false;
+  for (let i = Math.max(0, blocks.length - 16); i < blocks.length; i++) {
     const b = blocks[i];
     if ((b.tgt && !b.retr) || b.err || b.trBusy || !b.src || !b.closed) continue;
     if (rt.segmenter && rt.segmenter.isPending(b)) continue;
-    if (b.kind === 'orig' && rt.kind === 'free') continue; // handled by onFreeFinal
     const to = targetLangFor(b);
     if (!to || to === b.srcLang) {
       b.retr = false;
       continue;
     }
-    translateBlock(b, b.srcLang || 'auto', to, { fallback: true });
+    if (b.trNextAt && b.trNextAt > now) {
+      waiting = true;
+      continue;
+    }
+    translateBlock(b, b.srcLang || 'auto', to, { fallback: rt.kind !== 'free' || b.kind === 'none' });
   }
+  if (waiting) scheduleTranslationRetry();
 }
+
+window.addEventListener('online', () => {
+  resetTranslatorBackoff();
+  for (const b of transcript.blocks) b.trNextAt = 0;
+  queueFallbackTranslations();
+});
 
 // ------------------------------------------------------------------ listening
 
@@ -452,16 +495,18 @@ async function startListening({ lang } = {}) {
 }
 
 async function startSoniox(mode) {
+  const seq = ++rt.startSeq;
   setPhase('starting');
   let stream;
   try {
     stream = await openMicrophone({ processing: settings.micProcessing });
   } catch (e) {
+    if (seq !== rt.startSeq) return; // a newer start/stop took over
     setPhase('idle');
     showMicError(e);
     return;
   }
-  if (rt.phase !== 'starting') {
+  if (seq !== rt.startSeq || rt.phase !== 'starting') {
     stopStream(stream); // cancelled while the permission prompt was open
     return;
   }
@@ -479,7 +524,7 @@ async function startSoniox(mode) {
       if (rt.engine !== engine) return;
       segmenter.ingest(tokens);
       scheduleRender();
-      markSessionDirty();
+      if (tokens.some((t) => t.is_final)) markSessionDirty();
     },
     onState: (st, info) => {
       if (rt.engine !== engine) return;
@@ -553,6 +598,7 @@ function startFree(mode, lang) {
 async function stopListening() {
   if (rt.phase === 'idle' || rt.phase === 'stopping') return;
   if (rt.phase === 'starting') {
+    rt.startSeq += 1; // the pending microphone request is now stale
     setPhase('idle');
     return;
   }
@@ -574,6 +620,7 @@ function finishRun() {
   stopStream(rt.stream);
   rt.stream = null;
   accountDuration();
+  rt.sessionMark = 0; // idle time is not listening time
   stopClock();
   keepAwake(false);
   rt.engine = null;
@@ -583,6 +630,7 @@ function finishRun() {
   freeInterim = null;
   transcript.clearPreview();
   setPhase('idle');
+  if (!$('banner').hidden && $('banner').classList.contains('info')) hideBanner();
   scheduleRender();
   saveCurrentSession();
   setTimeout(queueFallbackTranslations, 50);
@@ -1216,13 +1264,7 @@ function wire() {
   $('btnClearHistory').addEventListener('click', () => {
     if (!confirm('¿Borrar todas las sesiones guardadas? No se puede deshacer.')) return;
     deleteAllSessions();
-    if (rt.phase === 'idle') {
-      session = null;
-      transcript.clear();
-      scheduleRender();
-    } else if (session) {
-      setCurrentSessionId(session.id);
-    }
+    discardCurrentSession();
     toast('Historial borrado');
   });
 
@@ -1259,15 +1301,7 @@ function wire() {
     if (!viewing || !confirm('¿Borrar esta sesión?')) return;
     const id = viewing.id;
     deleteSession(id);
-    if (session && session.id === id) {
-      if (rt.phase === 'idle') {
-        session = null;
-        transcript.clear();
-        scheduleRender();
-      } else {
-        setCurrentSessionId(id);
-      }
-    }
+    if (session && session.id === id) discardCurrentSession();
     closeSheet('sheetSession');
     renderHistory();
     toast('Sesión borrada');
